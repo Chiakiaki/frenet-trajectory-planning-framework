@@ -18,7 +18,7 @@ GYM_ENV:
 BEHAVIOR_PLANNER:
   MOBIL:
     PT: 4.0                                                     # Future propagation time
-  IDM: { 'a_max': 6.878, 'delta': 4, 'T': 1.6, 'd0': 2, 'b': 5 } # a_max: ego max speed | delta:Acceleration exponent | T:  Safe time headway
+  IDM: { 'a_max': 6.878, 'delta': 4, 'T': 1.6, 'd0': 1, 'b': 5 } # a_max: ego max speed | delta:Acceleration exponent | T:  Safe time headway
                                                                  # d0: minimum distance gap | b: Desired deceleration:
 
 LOCAL_PLANNER:

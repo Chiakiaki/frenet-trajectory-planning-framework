@@ -105,7 +105,7 @@ class CarlaGymEnv(gym.Env):
                 *********************************************** Behavior Planner *****************************************************
                 **********************************************************************************************************************
         """
-        # self.MOBIL.run_step(self.f_state, self.traffic_module.actors_batch)
+#        self.MOBIL.run_step(self.f_state, self.traffic_module.actors_batch)#callculate acc, will be used in motion_planner
         # change_lane = 0 # random.randint(-1, 1)
         """
                 **********************************************************************************************************************

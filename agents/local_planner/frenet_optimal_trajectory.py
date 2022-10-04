@@ -17,6 +17,7 @@ import copy
 import math
 from agents.local_planner import cubic_spline_planner
 from config import cfg
+import matplotlib.pyplot as plt
 
 
 def euclidean_distance(v1, v2):
@@ -351,13 +352,13 @@ class FrenetPlanner:
                      'Right Up':    {'Exist': False, 'Frenet State': [None, None], 'Speed': None, 'Target Speed': None}}
 
         # [-3.5, 0.0, 3.5, 7.0] => [0, 1, 2, 3]
-        lane = int(round(d + self.LANE_WIDTH, 1) // self.LANE_WIDTH)
+        lane = int(round(d + self.LANE_WIDTH + 1., 1) // self.LANE_WIDTH)#bug fix for find surrounding vehicles
 
         # l: left | c: center | r: right | u: up | d: down
         lu_min = ld_min = cu_min = cd_min = ru_min = rd_min = float('inf')
         for actor in actors_batch:
             s_, d_ = actor['Frenet State']
-            lane_ = int(round(d_ + self.LANE_WIDTH, 1) // self.LANE_WIDTH)
+            lane_ = int(round(d_ + self.LANE_WIDTH + 1., 1) // self.LANE_WIDTH)#bug fix
             s_diff = s - s_
 
             # left
@@ -387,8 +388,8 @@ class FrenetPlanner:
                     sur_actos['Center Down']['Speed'] = actor['Cruise Control'].speed
                     sur_actos['Center Down']['Target Speed'] = actor['Cruise Control'].targetSpeed
                 # up
-                elif s_diff < 0 and s_diff < cu_min:
-                    cd_min = s_diff
+                elif s_diff < 0 and abs(s_diff) < cu_min:
+                    cu_min = abs(s_diff)#bug fix, wrong calculation of find surrounding vehicles
                     sur_actos['Center Up']['Exist'] = True
                     sur_actos['Center Up']['Frenet State'] = [s_, d_]
                     sur_actos['Center Up']['Speed'] = actor['Cruise Control'].speed
@@ -437,9 +438,59 @@ class FrenetPlanner:
             acc_cmd = self.a_max * (1 - (v / vd) ** self.delta - (d_star / d) ** 2)
         return acc_cmd
 
+    
+
+    def cal_mobil_accelerations_ae(self, ego_s, ego_v, ego_s_, ego_v_, lane_, pt, sur_actors,tv):
+        """
+        INPUT: x: current value, x_: projected value for pt seconds later
+               lane: -1: left, 0: center, 1: right
+               tv: target v
+        OUTPUT: an: IDM commanded acceleration, an_: Projected IDM command acceleration
+        """
+        
+        if sur_actors['Center Up']['Exist']:
+            s22 = sur_actors['Center Up']['Frenet State'][0]
+            v22 = sur_actors['Center Up']['Speed']
+            ae = self.idm_acceleration(ego_s, ego_v, tv, s2=s22, v2=v22)
+        else:
+            ae = self.idm_acceleration(ego_s, ego_v, tv)
+        
+        tmp_no_leading_vehicle = 0
+        if lane_ == -1 and sur_actors['Left Up']['Exist']:
+            s2 = sur_actors['Left Up']['Frenet State'][0]
+            v2 = sur_actors['Left Up']['Speed']
+            vd = sur_actors['Left Up']['Target Speed']
+        elif lane_ == 1 and sur_actors['Right Up']['Exist']:
+            s2 = sur_actors['Right Up']['Frenet State'][0]
+            v2 = sur_actors['Right Up']['Speed']
+            vd = sur_actors['Right Up']['Target Speed']
+        elif lane_ == 0 and sur_actors['Center Up']['Exist']:
+            s2 = sur_actors['Center Up']['Frenet State'][0]
+            v2 = sur_actors['Center Up']['Speed']
+            vd = sur_actors['Center Up']['Target Speed']
+        else:
+            tmp_no_leading_vehicle = 1
+        
+        if tmp_no_leading_vehicle == 0:
+            a_leading = self.idm_acceleration(s2,v2,vd)    
+            s2_ = s2 + v2 * pt#same with original logic, though is shit :)
+            v2_ = min(v2 + a_leading * pt, vd)#same with original logic
+            ae_ = self.idm_acceleration(ego_s_, ego_v_, tv, s2=s2_, v2=v2_)
+        else:
+            #no leading vehicle
+            s2 = None
+            v2 = None
+            s2_ = None
+            V2_ = None
+            ae_ = self.idm_acceleration(ego_s_, ego_v_, tv)
+        
+        print(lane_,':',ae_-ae,s2_,s2,v2,pt)
+        return ae, ae_
+
+
     def cal_mobil_accelerations(self, ego_s, ego_v, ego_s_, ego_v_, lane_, pt, sur_actors):
         """
-        INPUT: x: current value, x_: projected value for pt seconds
+        INPUT: x: current value, x_: projected value for pt seconds later
                lane: -1: left, 0: center, 1: right
         OUTPUT: an: IDM commanded acceleration, an_: Projected IDM command acceleration
         """
@@ -456,7 +507,7 @@ class FrenetPlanner:
             else:
                 an = self.idm_acceleration(s, v, vd)
 
-            s_ = s + v * pt
+            s_ = s + v * pt #very lazy implementation, assume constant speed here, but speed is increasing
             v_ = v + an * pt
             an_ = self.idm_acceleration(s_, v_, vd, s2=ego_s_, v2=ego_v_)
 
@@ -472,7 +523,7 @@ class FrenetPlanner:
                     s2 = sur_actors['Center Up']['Frenet State'][0]
                     v2 = sur_actors['Center Up']['Speed']
                     s2_ = s2 + v2 * pt
-                    v2_ = v2 + ao * pt
+                    v2_ = v2 + ao * pt #I don't understand why ao*pt ??????? ao is of the following vehicle, not the leading one
                     ao_ = self.idm_acceleration(s_, v_, vd, s2=s2_, v2=v2_)
                 else:
                     ao_ = self.idm_acceleration(s_, v_, vd)
@@ -514,7 +565,7 @@ class FrenetPlanner:
             else:
                 ao = ao_ = 0
 
-        else:   # Ego stays on the lane
+        else:   
             an = an_ = 0
 
             if sur_actors['Center Down']['Exist']:
@@ -522,14 +573,29 @@ class FrenetPlanner:
                 v = sur_actors['Center Down']['Speed']
                 vd = sur_actors['Center Down']['Target Speed']
                 ao = self.idm_acceleration(s, v, vd, s2=ego_s, v2=ego_v)
-
+                
                 s_ = s + v * pt
                 v_ = v + ao * pt
-                ao_ = self.idm_acceleration(s_, v_, vd, s2=ego_s_, v2=ego_v_)
+                if lane_ == 0:
+                    #stay on the current lane, original code past here
+                    ao_ = self.idm_acceleration(s_, v_, vd, s2=ego_s_, v2=ego_v_)
+                
+                #fix bug for missing condition:
+                elif sur_actors['Center Up']['Exist']:
+                    s2 = sur_actors['Center Up']['Frenet State'][0]
+                    v2 = sur_actors['Center Up']['Speed']
+                    s2_ = s2 + v2 * pt
+                    v2_ = v2 + ao * pt
+                    ao_ = self.idm_acceleration(s_, v_, vd, s2=s2_, v2=v2_)
+                else:
+                    ao_ = self.idm_acceleration(s_, v_, vd)
+                
+
             else:
                 ao = ao_ = 0
         
         return an, an_, ao, ao_
+
 
     def generate_single_frenet_path(self, f_state, df=0, Tf=4, Vf=30 / 3.6):
         """
@@ -558,7 +624,19 @@ class FrenetPlanner:
         fp = self.calc_global_paths([fp])[0]
 
         return fp
-
+    
+    def show_surrounding_actors_existance(self, sur_actos):
+        tmp = np.zeros([2,3])
+        tmp[0,1] = sur_actos['Center Up']['Exist']
+        tmp[1,1] = sur_actos['Center Down']['Exist']
+        tmp[0,2] = sur_actos['Right Up']['Exist']
+        tmp[1,2] = sur_actos['Right Down']['Exist']
+        tmp[0,0] = sur_actos['Left Up']['Exist']
+        tmp[1,0] = sur_actos['Left Down']['Exist']
+        plt.imshow(tmp)
+        plt.show()
+        return
+    
     def calc_frenet_paths(self, f_state, other_actors, target_speed=30 / 3.6):
         """
         generate lattices - discretized candidate frenet paths
@@ -569,12 +647,17 @@ class FrenetPlanner:
         v = math.sqrt(s_d**2 + d_d**2)
 
         sur_actos = self.find_surrounding_actors(s, d, other_actors)
+        self.show_surrounding_actors_existance(sur_actos)
 
         frenet_paths = []
 
         # generate path to each offset goal
         path_id = 0
         for di in [d-self.LANE_WIDTH, d, d+self.LANE_WIDTH]:
+            print(d)
+            #avoid off-road planning
+            if di > self.LANE_WIDTH*2 + 1 or di < - self.LANE_WIDTH - 1:
+                continue
 
             # Lateral motion planning
             for Ti in np.arange(self.MINT, self.MAXT + self.D_T, self.D_T):
@@ -602,14 +685,28 @@ class FrenetPlanner:
                         tfp.s_d.append(lon_qp.calc_first_derivative(t))
                         tfp.s_dd.append(lon_qp.calc_second_derivative(t))
                         tfp.s_ddd.append(lon_qp.calc_third_derivative(t))
-
-                    s_ = tfp.s[-1]
-                    v_ = math.sqrt(tfp.s_d[-1]**2 + tfp.d_d[-1]**2)
-                    lane_ = int((tfp.d[-1] - d)/self.LANE_WIDTH)
-                    pt = tfp.t[-1]
+                    
+                    
+                    idx_for_mobile = 10#originally -1. Lets select the same time instance to compaire acc change for different paths
+                    s_ = tfp.s[idx_for_mobile]# I doubt such pt value to calculate acc change
+                    v_ = math.sqrt(tfp.s_d[idx_for_mobile]**2 + tfp.d_d[idx_for_mobile]**2)
+                    lane_ = int((tfp.d[-1] - d)/(self.LANE_WIDTH-1.))#fix bug. or it will all be 0
+                    pt = tfp.t[idx_for_mobile]# I doubt such pt value to calculate acc change
                     an, an_, ao, ao_ = self.cal_mobil_accelerations(s, v, s_, v_, lane_, pt, sur_actos)
+                    
+                    """
+                    # the code below will neglect the existance of surrounding vehicles. 
                     ae = (tfp.s[1] - tfp.s[0]) * self.dt
                     ae_ = (tfp.s[-1] - tfp.s[-2]) * self.dt
+                    """
+                    # So, lets try calculate ae and ae_ for the same manner
+                    ae, ae_ = self.cal_mobil_accelerations_ae(s, v, s_, v_, lane_, pt, sur_actos, tv)
+#                    ae, ae_ = self.cal_mobil_accelerations_ae(s, v, s_, v_, lane_, pt, sur_actos, tv)
+                    
+                    
+                    
+                    
+                    
                     p, q = 1, 0.5
 
                     Jm = -1 * (ae_ - ae + p*(an_ - an) + q*(ao_ - ao))
@@ -619,12 +716,12 @@ class FrenetPlanner:
                     Jj = math.sqrt(Jp + Js) / len(tfp.t)
 
                     # square of diff from target speed
-                    speed = math.sqrt(tfp.s_d[-1]**2 + tfp.d_d[-1]**2)
+                    speed = math.sqrt(tfp.s_d[idx_for_mobile]**2 + tfp.d_d[idx_for_mobile]**2)
                     ev = (target_speed - speed) ** 2
 
                     # print(Jj, Ti, ev, Jm)
-                    tfp.cf = Jj/500 + 2*Ti/6 + 4*ev/2 + 10*Jm/0.15
-                    # tfp.cf = Jm
+#                    tfp.cf = Jj/500 + 2*Ti/6 + 4*ev/2 + 10*Jm/0.15
+                    tfp.cf = Jm
 
                     frenet_paths.append(tfp)
         # print('--------------------------------')

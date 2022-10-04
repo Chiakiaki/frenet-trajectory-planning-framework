@@ -99,9 +99,10 @@ class MOBIL:
         """
         ego_s_ = ego_s + ego_v * self.pt    # ego s projection (constant speed)
         ego_v_ = ego_v + sur_actors['left down']['a'] * self.pt
-
+        
         # Left down
         if sur_actors['left down']['actor'] is not None:
+#            ego_v_ = ego_v + sur_actors['left down']['a'] * self.pt
             if sur_actors['left up']['actor'] is not None:
                 sur_actors['left down']['a'] = self.idm_acceleration(sur_actors['left down']['actor']['Frenet State'][0],
                                                                      sur_actors['left down']['actor']['Cruise Control'].speed,
